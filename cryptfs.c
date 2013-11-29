@@ -15,6 +15,7 @@ typedef struct crypt_data
 {
 	char *path;
 	char *pass;
+	char* rawpass;
 	int *start;
 	int* headersize;
 } crypt_data;
@@ -96,10 +97,7 @@ static int crypt_create (const char* path ,mode_t mode, struct fuse_file_info *f
 	int fd = creat( strcat(fullpath,path) , mode);
 	if ( fd < 0 )return -errno;
 	fi->fh = fd;
-	char passlength[3];
-	int2str(strlen(PRDATA->pass),passlength);
-	pwrite ( fd,passlength,2,0);
-	pwrite ( fd,PRDATA->pass,getpasslength(),2);
+	pwrite ( fd,PRDATA->pass,getpasslength(),0);
 	*(PRDATA->start) = *(PRDATA->headersize);
 	return 0;
 }
@@ -110,17 +108,13 @@ static int crypt_read(const char* path,char* buf,size_t size,off_t offset,struct
 	char fullpath[100];
 	strcpy(fullpath, PRDATA->path);
 	strcat (fullpath , path) ;
-	char sz[3];
-	int res = read ( fullpath,sz,2 );
-	int num = 0;
-	if ( res == 2 ) num = getnum(sz);
 	char buffer[100];
 	int ret=0;
 	int start = 0;
-        if ( offset < 2+num ) start = 2+num;	
+        if ( offset < getpasslength() ) start = getpasslength();	
 	ret = pread ( fi->fh , buffer, size,start+offset );
-	char M[50];
-	strcpy(M,PRDATA->pass);
+	char M[100];
+	strcpy(M,PRDATA->rawpass);
 	int i;
 	for (i=0;i<ret;i++)
 		buf[i] = (char)((int)buffer[i] ^ (int) M[(offset+i)%strlen(M)] );
@@ -451,8 +445,8 @@ int main(int argc,char *argv[])
 		int* start = (int*) malloc(sizeof(int));
 		int* headersize = (int*) malloc(sizeof(int));
 		*start = 0;
+		char *pass = calloc(150,sizeof(char));
 		scanf("%s",pass);
-
 		
 		unsigned char digest[SHA512_DIGEST_LENGTH];
 		SHA512((unsigned char*)&pass,strlen(pass),(unsigned char*)&digest);
@@ -464,6 +458,7 @@ int main(int argc,char *argv[])
 		data.path = path;
 		data.pass = mdString;
 		data.start = start;
+		data.rawpass = pass;
 		data.headersize = headersize;
 		char ret[3];
 		int2str(strlen(data.pass),ret);
