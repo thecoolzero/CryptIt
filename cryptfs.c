@@ -9,6 +9,7 @@
 #include "errors.h"
 #include <openssl/sha.h>
 
+#define MAXPASSLENGTH 150
 #define PRDATA ((crypt_data*)(fuse_get_context()->private_data))
 
 typedef struct crypt_data
@@ -66,7 +67,7 @@ static int crypt_readdir(const char* path,void* buf,fuse_fill_dir_t filler,off_t
 
 static int crypt_getattr(const char* path,struct stat *stbuf)
 {
-	char fullpath[100];
+	char fullpath[1024];
 	strcpy(fullpath,PRDATA->path);
 	int res = lstat(strcat(fullpath,path),stbuf);
 	if ( res == -1 ) return -errno;
@@ -76,7 +77,7 @@ static int crypt_getattr(const char* path,struct stat *stbuf)
 
 static int crypt_opendir (const char* path, struct fuse_file_info *fi)
 {
-	char fullpath[100];
+	char fullpath[1024];
 	strcpy(fullpath, PRDATA->path);
 	DIR* dp = opendir( strcat(fullpath,path) ) ;
 	fi->fh = dp;
@@ -84,7 +85,7 @@ static int crypt_opendir (const char* path, struct fuse_file_info *fi)
 }
 static int crypt_access ( const char* path,int mask)
 {
-	char fullpath[100];
+	char fullpath[1024];
 	strcpy(fullpath,PRDATA->path);
 	return access(strcat(fullpath,path),mask);
 }
@@ -92,11 +93,14 @@ static int crypt_access ( const char* path,int mask)
 
 static int crypt_create (const char* path ,mode_t mode, struct fuse_file_info *fi) 
 {
-	char fullpath[100];
+	char fullpath[1024];
 	strcpy(fullpath,PRDATA->path);
 	int fd = creat( strcat(fullpath,path) , mode);
 	if ( fd < 0 )return -errno;
 	fi->fh = fd;
+	/*char sz[3];
+	int2str(getpasslength(),sz);
+	pwrite ( fd,sz,2,0 );*/
 	pwrite ( fd,PRDATA->pass,getpasslength(),0);
 	*(PRDATA->start) = *(PRDATA->headersize);
 	return 0;
@@ -105,15 +109,15 @@ static int crypt_create (const char* path ,mode_t mode, struct fuse_file_info *f
 
 static int crypt_read(const char* path,char* buf,size_t size,off_t offset,struct fuse_file_info *fi)
 {
-	char fullpath[100];
+	char fullpath[1024];
 	strcpy(fullpath, PRDATA->path);
 	strcat (fullpath , path) ;
-	char buffer[100];
+	char *buffer = calloc ( size+10,sizeof(char));
 	int ret=0;
 	int start = 0;
-        if ( offset < getpasslength() ) start = getpasslength();	
+        if ( offset < *(PRDATA->headersize) ) start = getpasslength();	
 	ret = pread ( fi->fh , buffer, size,start+offset );
-	char M[100];
+	char M[MAXPASSLENGTH];
 	strcpy(M,PRDATA->rawpass);
 	int i;
 	for (i=0;i<ret;i++)
@@ -123,7 +127,7 @@ static int crypt_read(const char* path,char* buf,size_t size,off_t offset,struct
 
 static int crypt_open(const char * path,struct fuse_file_info *fi)
 {
-	char fullpath[100];
+	char fullpath[1024];
 	strcpy(fullpath,PRDATA->path);
 	int fd = open( strcat(fullpath,path) , fi->flags);
 	if ( fd < 0 )return -errno;
@@ -134,17 +138,9 @@ static int crypt_open(const char * path,struct fuse_file_info *fi)
 
 static int crypt_write(const char* path , const char * buf,size_t size, off_t offset,struct fuse_file_info* fi )
 {
-	char fullpath[100];
-	strcpy(fullpath, PRDATA->path) ;
-	int fd = open ( strcat(fullpath,path) , O_RDWR | O_TRUNC );
-	char passlength[3];
-	int2str(getpasslength(),passlength);
-	if ( offset < *(PRDATA->headersize) )
-	{
-		pwrite ( fd,passlength,2,0);
-		pwrite ( fd,PRDATA->pass,getpasslength(),2);
-		*(PRDATA->start) = *(PRDATA->headersize);
-	}	
+	//char fullpath[1024];
+	//strcpy(fullpath, PRDATA->path) ;
+	//int fd = open ( strcat(fullpath,path) , O_RDWR | O_TRUNC );
 	//CHECK FOR CORRECT PASS
 	/*char sz[3];
 	int res ; 
@@ -156,22 +152,25 @@ static int crypt_write(const char* path , const char * buf,size_t size, off_t of
 		return -errno;
 	}
 	num = genum(sz);
-	char buffer [100];*/
-	if ( fd < 0 ) return -errno;
+	char buffer [1024];*/
+	if ( offset < *(PRDATA->headersize) )
+	{
+		pwrite ( fi->fh,PRDATA->pass,getpasslength(),0);
+		*(PRDATA->start) = *(PRDATA->headersize);
+	}	
 	char *towrite = (char*) malloc ( (size+10) * sizeof( char ) );
 	int i;
 	for (i = 0 ; i < size ; i++)
-		towrite [i] = buf[i] ^ PRDATA->pass[ (i + *(PRDATA->start)+offset-*(PRDATA->headersize))%strlen(PRDATA->pass) ] ; 
+		towrite [i] = buf[i] ^ PRDATA->rawpass[ (i + *(PRDATA->start)+offset-*(PRDATA->headersize))%strlen(PRDATA->rawpass) ] ; 
 	towrite[size] = 0;
-	int res = pwrite ( fd,towrite,size,*(PRDATA->start)+offset);
+	int res = pwrite ( fi->fh,towrite,size,*(PRDATA->start)+offset);
 	if ( res < 0 ) res = -errno;
-	close(fd);
 	return res;
 }
 
 int crypt_truncate(const char* path,off_t newsize)
 {
-	char fullpath[100];
+	char fullpath[1024];
 	strcpy(fullpath, PRDATA->path) ;
 	int retstat = truncate( strcat(fullpath,path),newsize );
 	if ( retstat < 0 ) retstat = -errno;  
@@ -188,7 +187,7 @@ int crypt_ftruncate(const char * path, off_t newsize,struct fuse_file_info* fi)
 
 int crypt_setxattr(const char* path,const char* name,const char* value,size_t size,int flags)
 {
-	char fullpath[100];
+	char fullpath[1024];
 	strcpy(fullpath, PRDATA->path) ;
 	int retstat = lsetxattr( strcat(fullpath,path),name,value,size,flags );
 	return retstat;
@@ -196,7 +195,7 @@ int crypt_setxattr(const char* path,const char* name,const char* value,size_t si
 
 int crypt_utime(const char* path , struct utimbuf* ubuf) 
 {
-	char fullpath[100];
+	char fullpath[1024];
 	strcpy(fullpath, PRDATA->path) ;
 	int retstat = utime( strcat(fullpath,path),ubuf );
 	return retstat;
@@ -204,7 +203,7 @@ int crypt_utime(const char* path , struct utimbuf* ubuf)
 
 int crypt_mknod( const char * path, mode_t mode,dev_t dev)
 {
-	char fullpath[100];
+	char fullpath[1024];
 	strcpy(fullpath,PRDATA->path);
 	strcat( fullpath, path) ;
 	int retstat;
@@ -237,7 +236,7 @@ int crypt_mknod( const char * path, mode_t mode,dev_t dev)
 
 int crypt_chmod( const char * path , mode_t mode) 
 {
-	char fullpath[100];
+	char fullpath[1024];
 	strcpy(fullpath,PRDATA->path);
 	int ret = chmod( strcat(fullpath,path),mode );
 	if ( ret < 0 ) ret=  -errno;
@@ -246,8 +245,8 @@ int crypt_chmod( const char * path , mode_t mode)
 
 int crypt_rename(const char * path , const char* newpath ) 
 {
-	char fullpath[100];
-	char fullnewpath[100];
+	char fullpath[1024];
+	char fullnewpath[1024];
 	strcpy(fullpath,PRDATA->path) ;
 	strcpy(fullnewpath,PRDATA->path);
 	int ret = rename ( strcat ( fullpath,path) , strcat ( fullnewpath,newpath) );
@@ -257,7 +256,7 @@ int crypt_rename(const char * path , const char* newpath )
 
 int crypt_chown ( const char* path , uid_t uid, gid_t gid)
 {
-	char fullpath [ 100 ];
+	char fullpath [ 1024 ];
 	strcpy ( fullpath, PRDATA->path );
 	int ret = chown ( strcat ( fullpath, path), uid,gid) ;
 	if (ret < 0 ) ret = -errno ;
@@ -266,7 +265,7 @@ int crypt_chown ( const char* path , uid_t uid, gid_t gid)
 
 int crypt_statfs(const char * path,struct statvfs *statv)
 {
-	char fullpath [ 100 ];
+	char fullpath [ 1024 ];
 	strcpy(fullpath , PRDATA->path ) ;
 	int ret = statvfs ( strcat( fullpath,path) , statv);
         if ( ret < 0 ) ret = -errno;	
@@ -299,7 +298,7 @@ int crypt_fsync ( const char* path,int datasync,struct fuse_file_info* fi)
 int crypt_getxattr(const char * path, const char* name , char* value,size_t size)
 {
 	int ret = 0;
-	char fullpath [ 100 ];
+	char fullpath [ 1024 ];
 	strcpy ( fullpath , PRDATA->path) ;
 	ret = lgetxattr ( strcat(fullpath,path) , name, value,size) ;
 	if ( ret < 0 ) ret = -errno;
@@ -308,7 +307,7 @@ int crypt_getxattr(const char * path, const char* name , char* value,size_t size
 
 int crypt_listxattr( const char* path, char* list,size_t size) 
 {
-	char fullpath[100];
+	char fullpath[1024];
 	strcpy ( fullpath, PRDATA->path ) ;
 	int ret = llistxattr( strcat(fullpath,path),list, size ) ;
 	if ( ret < 0 ) ret= -errno;
@@ -317,7 +316,7 @@ int crypt_listxattr( const char* path, char* list,size_t size)
 
 int crypt_removexattr ( const char* path, const char* name ) 
 {
-	char fullpath[100];
+	char fullpath[1024];
 	strcpy ( fullpath, PRDATA->path );
 	int ret = lremovexattr ( strcat ( fullpath, path) , name ) ;
 	if ( ret < 0 ) ret = -errno;
@@ -338,7 +337,7 @@ int crypt_releasedir ( const char *path, struct fuse_file_info* fi )
 
 int crypt_mkdir ( const char* path ,mode_t mode)
 {
-	char fullpath[100];
+	char fullpath[1024];
 	strcpy ( fullpath,PRDATA->path);
 	int ret = mkdir ( strcat ( fullpath, path ) , mode ) ;
 	if ( ret < 0 ) ret = -errno;
@@ -347,7 +346,7 @@ int crypt_mkdir ( const char* path ,mode_t mode)
 
 int crypt_unlink ( const char* path ) 
 {
-	char fullpath[100];
+	char fullpath[1024];
 	strcpy ( fullpath, PRDATA->path );
 	int ret = unlink ( strcat ( fullpath , path)  );
 	if ( ret < 0 ) ret = -errno;
@@ -356,7 +355,7 @@ int crypt_unlink ( const char* path )
 
 int crypt_rmdir ( const char* path )
 {
-	char fullpath[100];
+	char fullpath[1024];
 	strcpy( fullpath , PRDATA->path) ;
 	int ret = rmdir ( strcat ( fullpath , path ) );
 	if ( ret < 0 ) ret = -errno;
@@ -373,7 +372,7 @@ int crypt_fgetattr( const char* path , struct stat* statbuf,struct fuse_file_inf
 
 void* crypt_init(struct fuse_conn_info *conn)
 {
-	*(PRDATA->headersize) = 2+ getpasslength();
+	*(PRDATA->headersize) = getpasslength();
 	return PRDATA;
 }
 
@@ -438,21 +437,24 @@ int main(int argc,char *argv[])
 	/////////// RUN EITHER FOR START AN ENCRYPTION OR USE AN EXISTING ONE ////////////////
 	if ( !toEnc )
 	{
-		char path[100];
+		char path[1024];
 		crypt_data data;
 		printf("You Havent Provided The Password For This FileSystem Yet, Please Enter The Password : ");
 		sprintf( path , "%s",realpath(argv[--argc],NULL) );
 		int* start = (int*) malloc(sizeof(int));
 		int* headersize = (int*) malloc(sizeof(int));
 		*start = 0;
-		char *pass = calloc(150,sizeof(char));
+		char *pass = calloc(MAXPASSLENGTH,sizeof(char));
 		scanf("%s",pass);
 		
 		unsigned char digest[SHA512_DIGEST_LENGTH];
-		SHA512((unsigned char*)&pass,strlen(pass),(unsigned char*)&digest);
-		char mdString= calloc( SHA512_DIGEST_LENGTH*2 + 1, sizeof(char));
+		SHA512((unsigned char*)pass,strlen(pass),(unsigned char*)digest);
+		char *mdString= calloc( SHA512_DIGEST_LENGTH*2 + 1, sizeof(char));
 		int i;
-		for (i=0;i<SHA512_DIGEST_LENGTH;i++) sprintf(mdString+2*i,"%02x",(unsigned int)digest[i]);
+		for (i=0;i<SHA512_DIGEST_LENGTH;i++) 
+			sprintf(mdString+2*i,"%02x",(unsigned int)digest[i]);
+		printf("%s\n",mdString);
+
 
 		//printf("So bad, You Haven't got the correct password\n");
 		data.path = path;
@@ -461,7 +463,7 @@ int main(int argc,char *argv[])
 		data.rawpass = pass;
 		data.headersize = headersize;
 		char ret[3];
-		int2str(strlen(data.pass),ret);
+		int2str(strlen(data.rawpass),ret);
 		printf("%s\n",ret);
 		return fuse_main(argc,argv,&cryp,&data);
 	}
