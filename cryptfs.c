@@ -67,8 +67,16 @@ static int crypt_readdir(const char* path,void* buf,fuse_fill_dir_t filler,off_t
 
 static int crypt_getattr(const char* path,struct stat *stbuf)
 {
-	char fullpath[1024];
+	char fullpath[4096];
 	strcpy(fullpath,PRDATA->path);
+	/*char* filepass = calloc(*(PRDATA->headersize)+1,sizeof(char));
+	int fd = open ( fullpath,O_RDONLY );
+	if ( fd < 0 ) return -errno;
+	read( fd , filepass, *(PRDATA->headersize));
+	close(fd);
+	if (!checkAccess ( filepass)) 
+		return -PERDENIED;
+	*/
 	int res = lstat(strcat(fullpath,path),stbuf);
 	if ( res == -1 ) return -errno;
 	return res;
@@ -77,7 +85,7 @@ static int crypt_getattr(const char* path,struct stat *stbuf)
 
 static int crypt_opendir (const char* path, struct fuse_file_info *fi)
 {
-	char fullpath[1024];
+	char fullpath[4096];
 	strcpy(fullpath, PRDATA->path);
 	DIR* dp = opendir( strcat(fullpath,path) ) ;
 	fi->fh = dp;
@@ -85,22 +93,32 @@ static int crypt_opendir (const char* path, struct fuse_file_info *fi)
 }
 static int crypt_access ( const char* path,int mask)
 {
-	char fullpath[1024];
+	struct stat st_buf;
+	char fullpath[4096];
 	strcpy(fullpath,PRDATA->path);
-	return access(strcat(fullpath,path),mask);
+	strcat(fullpath,path);
+	stat ( fullpath, &st_buf) ;
+	if ( S_ISREG(st_buf.st_mode) )
+	{
+			char* filepass = calloc(*(PRDATA->headersize)+1,sizeof(char));
+		int fd = open ( fullpath,O_RDONLY );
+		if ( fd < 0 ) return -errno;
+		read( fd , filepass, *(PRDATA->headersize));
+		close(fd);
+		if (!checkAccess ( filepass)) 
+			return -PERDENIED;
+	}
+	return access(fullpath,mask);
 }
 
 
 static int crypt_create (const char* path ,mode_t mode, struct fuse_file_info *fi) 
 {
-	char fullpath[1024];
+	char fullpath[4096];
 	strcpy(fullpath,PRDATA->path);
 	int fd = creat( strcat(fullpath,path) , mode);
 	if ( fd < 0 )return -errno;
 	fi->fh = fd;
-	/*char sz[3];
-	int2str(getpasslength(),sz);
-	pwrite ( fd,sz,2,0 );*/
 	pwrite ( fd,PRDATA->pass,getpasslength(),0);
 	*(PRDATA->start) = *(PRDATA->headersize);
 	return 0;
@@ -109,9 +127,15 @@ static int crypt_create (const char* path ,mode_t mode, struct fuse_file_info *f
 
 static int crypt_read(const char* path,char* buf,size_t size,off_t offset,struct fuse_file_info *fi)
 {
-	char fullpath[1024];
+	char fullpath[4096];
 	strcpy(fullpath, PRDATA->path);
 	strcat (fullpath , path) ;
+	int fd = open ( fullpath , O_RDONLY);
+	char* filepass = calloc(*(PRDATA->headersize)+1,sizeof(char));
+	read( fd , filepass, *(PRDATA->headersize));
+	close(fd);
+	if (!checkAccess ( filepass)) 
+		return -PERDENIED;
 	char *buffer = calloc ( size+10,sizeof(char));
 	int ret=0;
 	int start = 0;
@@ -127,18 +151,26 @@ static int crypt_read(const char* path,char* buf,size_t size,off_t offset,struct
 
 static int crypt_open(const char * path,struct fuse_file_info *fi)
 {
-	char fullpath[1024];
+	char fullpath[4096];
 	strcpy(fullpath,PRDATA->path);
-	int fd = open( strcat(fullpath,path) , fi->flags);
+	strcat ( fullpath,path);
+	int fd = open ( fullpath, O_RDONLY);
+	char* filepass = calloc(*(PRDATA->headersize)+1,sizeof(char));
+	read( fd , filepass, *(PRDATA->headersize));
+	close(fd);
+	if (!checkAccess ( filepass)) 
+		return -PERDENIED;
+	fd = open( fullpath , fi->flags);
 	if ( fd < 0 )return -errno;
 	*(PRDATA->start) = 0;
 	fi->fh = fd;
+
 	return 0;
 }
 
 static int crypt_write(const char* path , const char * buf,size_t size, off_t offset,struct fuse_file_info* fi )
 {
-	//char fullpath[1024];
+	//char fullpath[4096];
 	//strcpy(fullpath, PRDATA->path) ;
 	//int fd = open ( strcat(fullpath,path) , O_RDWR | O_TRUNC );
 	//CHECK FOR CORRECT PASS
@@ -152,7 +184,16 @@ static int crypt_write(const char* path , const char * buf,size_t size, off_t of
 		return -errno;
 	}
 	num = genum(sz);
-	char buffer [1024];*/
+	char buffer [4096];*/
+	char fullpath[4096];
+	strcpy(fullpath,PRDATA->path);
+	strcat ( fullpath,path);
+	int fd = open ( fullpath, O_RDONLY);
+	char* filepass = calloc(*(PRDATA->headersize)+1,sizeof(char));
+	read( fd , filepass, *(PRDATA->headersize));
+	close(fd);
+	if (!checkAccess ( filepass)) 
+		return -PERDENIED;
 	if ( offset < *(PRDATA->headersize) )
 	{
 		pwrite ( fi->fh,PRDATA->pass,getpasslength(),0);
@@ -170,9 +211,16 @@ static int crypt_write(const char* path , const char * buf,size_t size, off_t of
 
 int crypt_truncate(const char* path,off_t newsize)
 {
-	char fullpath[1024];
+	char fullpath[4096];
 	strcpy(fullpath, PRDATA->path) ;
-	int retstat = truncate( strcat(fullpath,path),newsize );
+	strcat ( fullpath,path) ;
+	int fd = open ( fullpath, O_RDONLY );
+	char* filepass = calloc(*(PRDATA->headersize)+1,sizeof(char));
+	read( fd , filepass, *(PRDATA->headersize));
+	close(fd);
+	if (!checkAccess ( filepass)) 
+		return -PERDENIED;
+	int retstat = truncate( fullpath ,newsize );
 	if ( retstat < 0 ) retstat = -errno;  
 	return retstat;
 }
@@ -187,23 +235,37 @@ int crypt_ftruncate(const char * path, off_t newsize,struct fuse_file_info* fi)
 
 int crypt_setxattr(const char* path,const char* name,const char* value,size_t size,int flags)
 {
-	char fullpath[1024];
+	char fullpath[4096];
 	strcpy(fullpath, PRDATA->path) ;
-	int retstat = lsetxattr( strcat(fullpath,path),name,value,size,flags );
+	strcat(fullpath,path);
+	int fd = open ( fullpath, O_RDONLY );
+	char* filepass = calloc(*(PRDATA->headersize)+1,sizeof(char));
+	read( fd , filepass, *(PRDATA->headersize));
+	close(fd);
+	if (!checkAccess ( filepass)) 
+		return -PERDENIED;
+	int retstat = lsetxattr( fullpath ,name,value,size,flags );
 	return retstat;
 }
 
 int crypt_utime(const char* path , struct utimbuf* ubuf) 
 {
-	char fullpath[1024];
+	char fullpath[4096];
 	strcpy(fullpath, PRDATA->path) ;
-	int retstat = utime( strcat(fullpath,path),ubuf );
+	strcat ( fullpath,path );
+	int fd = open ( fullpath, O_RDONLY );
+	char* filepass = calloc(*(PRDATA->headersize)+1,sizeof(char));
+	read( fd , filepass, *(PRDATA->headersize));
+	close(fd);
+	if (!checkAccess ( filepass)) 
+		return -PERDENIED;
+	int retstat = utime( fullpath ,ubuf );
 	return retstat;
 }
 
 int crypt_mknod( const char * path, mode_t mode,dev_t dev)
 {
-	char fullpath[1024];
+	char fullpath[4096];
 	strcpy(fullpath,PRDATA->path);
 	strcat( fullpath, path) ;
 	int retstat;
@@ -236,38 +298,71 @@ int crypt_mknod( const char * path, mode_t mode,dev_t dev)
 
 int crypt_chmod( const char * path , mode_t mode) 
 {
-	char fullpath[1024];
+	char fullpath[4096];
 	strcpy(fullpath,PRDATA->path);
-	int ret = chmod( strcat(fullpath,path),mode );
+	strcat(fullpath,path);
+	int fd = open ( fullpath, O_RDONLY );
+	char* filepass = calloc(*(PRDATA->headersize)+1,sizeof(char));
+	read( fd , filepass, *(PRDATA->headersize));
+	close(fd);
+	if (!checkAccess ( filepass)) 
+		return -PERDENIED;
+	int ret = chmod( fullpath ,mode );
 	if ( ret < 0 ) ret=  -errno;
 	return ret;
 }
 
 int crypt_rename(const char * path , const char* newpath ) 
 {
-	char fullpath[1024];
-	char fullnewpath[1024];
+	char fullpath[4096];
+	char fullnewpath[4096];
 	strcpy(fullpath,PRDATA->path) ;
+	strcat(fullpath,path);
 	strcpy(fullnewpath,PRDATA->path);
-	int ret = rename ( strcat ( fullpath,path) , strcat ( fullnewpath,newpath) );
+	int fd = open ( fullpath, O_RDONLY );
+	char* filepass = calloc(*(PRDATA->headersize)+1,sizeof(char));
+	read( fd , filepass, *(PRDATA->headersize));
+	close(fd);
+	if (!checkAccess ( filepass)) 
+		return -PERDENIED;
+	int ret = rename ( fullpath , strcat ( fullnewpath,newpath) );
 	if (ret < 0 ) ret = -errno;
 	return ret;
 }
 
 int crypt_chown ( const char* path , uid_t uid, gid_t gid)
 {
-	char fullpath [ 1024 ];
+	char fullpath [ 4096 ];
 	strcpy ( fullpath, PRDATA->path );
-	int ret = chown ( strcat ( fullpath, path), uid,gid) ;
+	strcat (fullpath,path);
+	int fd = open ( fullpath, O_RDONLY );
+	char* filepass = calloc(*(PRDATA->headersize)+1,sizeof(char));
+	read( fd , filepass, *(PRDATA->headersize));
+	close(fd);
+	if (!checkAccess ( filepass)) 
+		return -PERDENIED;
+	int ret = chown ( fullpath , uid,gid) ;
 	if (ret < 0 ) ret = -errno ;
 	return ret;
 }
 
 int crypt_statfs(const char * path,struct statvfs *statv)
 {
-	char fullpath [ 1024 ];
+	struct stat st_buf;
+	char fullpath [ 4096 ];
 	strcpy(fullpath , PRDATA->path ) ;
-	int ret = statvfs ( strcat( fullpath,path) , statv);
+	strcat(fullpath,path);
+	stat(fullpath,&st_buf);
+	if ( S_ISREG(st_buf.st_mode) )
+	{
+		int fd = open ( fullpath, O_RDONLY );
+		char* filepass = calloc(*(PRDATA->headersize)+1,sizeof(char));
+		read( fd , filepass, *(PRDATA->headersize));
+		close(fd);
+		if (!checkAccess ( filepass)) 
+			return -PERDENIED;
+	}
+	int ret = statvfs ( fullpath , statv);
         if ( ret < 0 ) ret = -errno;	
 	return ret;
 }
@@ -298,27 +393,48 @@ int crypt_fsync ( const char* path,int datasync,struct fuse_file_info* fi)
 int crypt_getxattr(const char * path, const char* name , char* value,size_t size)
 {
 	int ret = 0;
-	char fullpath [ 1024 ];
+	char fullpath [ 4096 ];
 	strcpy ( fullpath , PRDATA->path) ;
-	ret = lgetxattr ( strcat(fullpath,path) , name, value,size) ;
+	strcat ( fullpath,path);
+	int fd = open ( fullpath, O_RDONLY );
+	char* filepass = calloc(*(PRDATA->headersize)+1,sizeof(char));
+	read( fd , filepass, *(PRDATA->headersize));
+	close(fd);
+	if (!checkAccess ( filepass)) 
+		return -PERDENIED;
+	ret = lgetxattr ( fullpath , name, value,size) ;
 	if ( ret < 0 ) ret = -errno;
 	return ret;
 }
 
 int crypt_listxattr( const char* path, char* list,size_t size) 
 {
-	char fullpath[1024];
+	char fullpath[4096];
 	strcpy ( fullpath, PRDATA->path ) ;
-	int ret = llistxattr( strcat(fullpath,path),list, size ) ;
+	strcat(fullpath,path);
+	int fd = open ( fullpath, O_RDONLY );
+	char* filepass = calloc(*(PRDATA->headersize)+1,sizeof(char));
+	read( fd , filepass, *(PRDATA->headersize));
+	close(fd);
+	if (!checkAccess ( filepass)) 
+		return -PERDENIED;
+	int ret = llistxattr( fullpath ,list, size ) ;
 	if ( ret < 0 ) ret= -errno;
 	return ret;
 }
 
 int crypt_removexattr ( const char* path, const char* name ) 
 {
-	char fullpath[1024];
+	char fullpath[4096];
 	strcpy ( fullpath, PRDATA->path );
-	int ret = lremovexattr ( strcat ( fullpath, path) , name ) ;
+	strcat(fullpath,path);
+	int fd = open ( fullpath, O_RDONLY );
+	char* filepass = calloc(*(PRDATA->headersize)+1,sizeof(char));
+	read( fd , filepass, *(PRDATA->headersize));
+	close(fd);
+	if (!checkAccess ( filepass)) 
+		return -PERDENIED;
+	int ret = lremovexattr ( fullpath , name ) ;
 	if ( ret < 0 ) ret = -errno;
 	return ret;
 }
@@ -337,7 +453,7 @@ int crypt_releasedir ( const char *path, struct fuse_file_info* fi )
 
 int crypt_mkdir ( const char* path ,mode_t mode)
 {
-	char fullpath[1024];
+	char fullpath[4096];
 	strcpy ( fullpath,PRDATA->path);
 	int ret = mkdir ( strcat ( fullpath, path ) , mode ) ;
 	if ( ret < 0 ) ret = -errno;
@@ -346,16 +462,23 @@ int crypt_mkdir ( const char* path ,mode_t mode)
 
 int crypt_unlink ( const char* path ) 
 {
-	char fullpath[1024];
+	char fullpath[4096];
 	strcpy ( fullpath, PRDATA->path );
-	int ret = unlink ( strcat ( fullpath , path)  );
+	strcat(fullpath,path);
+	int fd = open ( fullpath, O_RDONLY );
+	char* filepass = calloc(*(PRDATA->headersize)+1,sizeof(char));
+	read( fd , filepass, *(PRDATA->headersize));
+	close(fd);
+	if (!checkAccess ( filepass)) 
+		return -PERDENIED;
+	int ret = unlink ( fullpath  );
 	if ( ret < 0 ) ret = -errno;
 	return ret;
 }
 
 int crypt_rmdir ( const char* path )
 {
-	char fullpath[1024];
+	char fullpath[4096];
 	strcpy( fullpath , PRDATA->path) ;
 	int ret = rmdir ( strcat ( fullpath , path ) );
 	if ( ret < 0 ) ret = -errno;
@@ -364,6 +487,15 @@ int crypt_rmdir ( const char* path )
 
 int crypt_fgetattr( const char* path , struct stat* statbuf,struct fuse_file_info* fi)
 {
+	char fullpath[4096];
+	strcpy(fullpath,PRDATA->path);
+	strcat(fullpath,path);
+	int fd = open ( fullpath, O_RDONLY );
+	char* filepass = calloc(*(PRDATA->headersize)+1,sizeof(char));
+	read( fd , filepass, *(PRDATA->headersize));
+	close(fd);
+	if (!checkAccess ( filepass)) 
+		return -PERDENIED;
 	int ret = fstat ( fi->fh , statbuf );
 	if ( ret < 0 ) ret = -errno;
 	return ret;
@@ -437,7 +569,7 @@ int main(int argc,char *argv[])
 	/////////// RUN EITHER FOR START AN ENCRYPTION OR USE AN EXISTING ONE ////////////////
 	if ( !toEnc )
 	{
-		char path[1024];
+		char path[4096];
 		crypt_data data;
 		printf("You Havent Provided The Password For This FileSystem Yet, Please Enter The Password : ");
 		sprintf( path , "%s",realpath(argv[--argc],NULL) );
